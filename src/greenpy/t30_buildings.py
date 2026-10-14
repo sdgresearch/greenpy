@@ -164,6 +164,11 @@ def get_canopy_cover_buildings_vector(
     whole tree area counts, so overlapping point canopies can exceed 100%.
     `total_pixels` holds the buffer area in m² (1 m² ≈ one pixel) for
     consistency with the raster path. Buildings with no trees get 0.
+
+    The spatial join is an inner join, which Sedona plans as a partitioned
+    spatial join; a LEFT JOIN on ST_Intersects falls back to a nested loop over
+    every building x tree pair (hours for a city). Buildings without trees are
+    added back with 0 afterwards.
     """
     sfx = view_suffix(geo_code)
 
@@ -180,15 +185,18 @@ def get_canopy_cover_buildings_vector(
         "ST_Area(ST_Intersection(FIRST(b.geometry), ST_Union_Aggr(t.geometry)))"
         if polygonal else "SUM(t.tree_area)"
     )
-    result_df = sedona.sql(f"""
-        SELECT
-            b.building_id,
-            ROUND(COALESCE({canopy_expr}, 0), 3) AS tree_pixels,
-            ROUND(MAX(ST_Area(b.geometry))) AS total_pixels
+    canopy_df = sedona.sql(f"""
+        SELECT b.building_id, ROUND({canopy_expr}, 3) AS tree_pixels
         FROM buildings_buffers_{sfx} b
-        LEFT JOIN t30b_trees_{sfx} t ON ST_Intersects(b.geometry, t.geometry)
+        JOIN t30b_trees_{sfx} t ON ST_Intersects(b.geometry, t.geometry)
         GROUP BY b.building_id
     """).toPandas()
+    result_df = sedona.sql(f"""
+        SELECT building_id, ROUND(ST_Area(geometry)) AS total_pixels
+        FROM buildings_buffers_{sfx}
+    """).toPandas()
+    result_df = result_df.merge(canopy_df, on="building_id", how="left")
+    result_df["tree_pixels"] = result_df["tree_pixels"].fillna(0.0)
 
     result_df["canopy_cover"] = (100.0 * result_df["tree_pixels"] / result_df["total_pixels"]).round(3)
     return result_df

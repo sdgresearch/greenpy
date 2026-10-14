@@ -31,5 +31,9 @@ def write_raster(da, path, **kwargs) -> None:
     da.encoding = {}
     path = Path(path)
     tmp = path.with_name(path.name + ".part")
-    da.rio.to_raster(tmp, driver="GTiff", **kwargs)
+    # compressed and tiled by default: city-wide 1 m canopy masks are ~1.5 GB
+    # uncompressed, and Spark's binaryFile reader (T30_buildings) caps files at 2 GB
+    options = {"compress": "deflate", "tiled": True, "blockxsize": 512, "blockysize": 512,
+               "bigtiff": "IF_SAFER", **kwargs}
+    da.rio.to_raster(tmp, driver="GTiff", **options)
     tmp.replace(path)
